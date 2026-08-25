@@ -17,12 +17,6 @@
     },
     "plugins": [
       "./plugins/withNativeModules"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "05883c9a-98d3-4c6a-8afe-3bf395a01afe"
-      }
-    },
-    "owner": "eliwoahzja"
+    ]
   }
 }

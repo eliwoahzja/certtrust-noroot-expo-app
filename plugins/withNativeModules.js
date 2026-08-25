@@ -3,6 +3,7 @@ const {
   withAppBuildGradle,
   withMainApplication,
   withAndroidManifest,
+  withGradleProperties,
   createRunOncePlugin,
 } = require('@expo/config-plugins');
 const fs = require('fs');
@@ -159,11 +160,28 @@ const withShizukuPermissions = (config) => {
   });
 };
 
+/**
+ * 5. Bump minSdkVersion to 24 (required by Shizuku API 13.1.5 manifest merger)
+ */
+const withMinSdk24 = (config) => {
+  return withGradleProperties(config, (config) => {
+    const prop = 'android.minSdkVersion';
+    const existing = config.modResults.find((item) => item.type === 'property' && item.key === prop);
+    if (existing) {
+      existing.value = '24';
+    } else {
+      config.modResults.push({ type: 'property', key: prop, value: '24' });
+    }
+    return config;
+  });
+};
+
 const withNativeModules = (config) => {
   config = withNativeSourceFiles(config);
   config = withShizukuGradleDependencies(config);
   config = withCertTrustPackage(config);
   config = withShizukuPermissions(config);
+  config = withMinSdk24(config);
   return config;
 };
 

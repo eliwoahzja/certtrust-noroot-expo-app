@@ -9,21 +9,21 @@
     "ios": "expo run:ios"
   },
   "dependencies": {
-    "@expo/vector-icons": "^14.0.0",
+    "@expo/vector-icons": "^15.0.2",
     "expo": "^57.0.16",
     "expo-doctor": "^1.20.3",
-    "expo-font": "12.0.9",
+    "expo-font": "~57.0.1",
     "expo-linking": "^57.0.7",
-    "expo-modules-core": "1.12.11",
-    "expo-status-bar": "~1.12.1",
-    "react": "18.2.0",
-    "react-native": "^0.87.0"
+    "expo-modules-core": "~57.0.13",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.2"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
     "@expo/config-plugins": "^57.0.9",
-    "@types/react": "~18.2.45",
-    "typescript": "~5.3.3"
+    "@types/react": "~19.2.4",
+    "typescript": "~6.0.3"
   },
   "private": true
 }

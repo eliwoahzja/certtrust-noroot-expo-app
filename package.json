@@ -5,7 +5,7 @@
     "start": "expo start --dev-client",
     "android": "expo run:android",
     "prebuild": "expo prebuild --clean",
-    "build:apk": "eas build -p android --profile preview",
+    "build:apk": "EAS_SKIP_AUTO_FINGERPRINT=1 eas build -p android --profile preview",
     "ios": "expo run:ios"
   },
   "dependencies": {

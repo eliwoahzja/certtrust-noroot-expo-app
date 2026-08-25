@@ -1,29 +1,28 @@
-# CertTrust No-Root - Expo Android App
+# CertTrust No-Root - Android CA Manager
 
-A React Native + Expo application for non-rooted Android phones that simplifies disabling and managing system trusted CA certificates.
+A React Native + Expo application for non-rooted Android phones (package: `com.certmanager.noroot`).
 
-## Quick Start
+## Architecture & Native Modules
+- **Managed Expo Workflow**: Configured via `plugins/withNativeModules.js` using `@expo/config-plugins`.
+- **Shizuku Wireless ADB Bridge**: Native module (`ShizukuExecutorModule.kt` + `CertTrustPackage.kt`) running privileged shell commands without root or PC.
+- **Dynamic Permission Dialog**: Handles runtime permission requests via `Shizuku.requestPermission()`.
+- **Honest Feedback**: Real exit code and output validation with fallback to Android Settings (`TRUSTED_CREDENTIALS`).
+
+## Build Workflow
 
 ### 1. Install Dependencies
 ```bash
 npm install
 ```
 
-### 2. Start the Expo Dev Server
+### 2. Verify Config Plugin & Prebuild
 ```bash
-npx expo start
+npx expo prebuild --platform android --clean
 ```
-Scan the QR code with the **Expo Go** app on your Android phone!
 
-### 3. Build Standalone Installable APK (Cloud Build - No Android Studio Needed)
+### 3. Build Standalone Installable APK via EAS
 ```bash
-# Install EAS CLI
 npm install -g eas-cli
-
-# Log in to Expo
 eas login
-
-# Build standalone .apk file
 eas build -p android --profile preview
 ```
-EAS will generate a direct download link to install the `.apk` on any Android device without root.

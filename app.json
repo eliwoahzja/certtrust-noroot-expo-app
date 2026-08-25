@@ -1,35 +1,26 @@
 {
   "expo": {
     "name": "CertTrust No-Root",
-    "slug": "android-cert-trust-noroot",
+    "slug": "certtrust-noroot",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#000000"
-    },
     "ios": {
       "supportsTablet": true
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#000000"
-      },
       "package": "com.certmanager.noroot",
       "permissions": [
         "android.permission.INTERNET",
-        "android.permission.BIND_VPN_SERVICE",
-        "rikka.shizuku.permission.API_V23",
-        "android.permission.FOREGROUND_SERVICE"
+        "rikka.shizuku.permission.API_V23"
       ]
     },
+    "plugins": [
+      "./plugins/withNativeModules"
+    ],
     "extra": {
       "eas": {
-        "projectId": "android-cert-noroot-project"
+        "projectId": "certtrust-noroot-project"
       }
     }
   }

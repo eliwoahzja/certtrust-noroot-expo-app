@@ -1,0 +1,22 @@
+package com.certmanager.noroot
+
+import android.view.View
+import com.facebook.react.ReactPackage
+import com.facebook.react.bridge.NativeModule
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.uimanager.ReactShadowNode
+import com.facebook.react.uimanager.ViewManager
+import java.util.Collections
+
+class CertTrustPackage : ReactPackage {
+    override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
+        val modules = ArrayList<NativeModule>()
+        modules.add(ShizukuExecutorModule(reactContext))
+        modules.add(DeviceOwnerDpcModule(reactContext))
+        return modules
+    }
+
+    override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<View, ReactShadowNode<*>>> {
+        return Collections.emptyList()
+    }
+}

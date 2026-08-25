@@ -3,7 +3,6 @@ const {
   withAppBuildGradle,
   withMainApplication,
   withAndroidManifest,
-  withGradleProperties,
   createRunOncePlugin,
 } = require('@expo/config-plugins');
 const fs = require('fs');
@@ -162,18 +161,44 @@ const withShizukuPermissions = (config) => {
 
 /**
  * 5. Bump minSdkVersion to 24 (required by Shizuku API 13.1.5 manifest merger)
+ *    Writes into gradle.properties AND patches build.gradle after prebuild.
  */
 const withMinSdk24 = (config) => {
-  return withGradleProperties(config, (config) => {
-    const prop = 'android.minSdkVersion';
-    const existing = config.modResults.find((item) => item.type === 'property' && item.key === prop);
-    if (existing) {
-      existing.value = '24';
-    } else {
-      config.modResults.push({ type: 'property', key: prop, value: '24' });
-    }
-    return config;
-  });
+  // 5a. Set android.minSdkVersion=24 in gradle.properties
+  config = withDangerousMod(config, [
+    'android',
+    (config) => {
+      const propsPath = path.join(config.modRequest.platformProjectRoot, 'gradle.properties');
+      let contents = fs.existsSync(propsPath) ? fs.readFileSync(propsPath, 'utf8') : '';
+      const prop = 'android.minSdkVersion';
+      const regex = new RegExp(`^${prop}=.*$`, 'm');
+      if (regex.test(contents)) {
+        contents = contents.replace(regex, `${prop}=24`);
+      } else {
+        contents = `${contents.trim()}\n${prop}=24\n`;
+      }
+      fs.writeFileSync(propsPath, contents, 'utf8');
+      return config;
+    },
+  ]);
+
+  // 5b. Also patch build.gradle to replace the fallback '23' with '24'
+  config = withDangerousMod(config, [
+    'android',
+    (config) => {
+      const gradlePath = path.join(config.modRequest.platformProjectRoot, 'build.gradle');
+      if (fs.existsSync(gradlePath)) {
+        let contents = fs.readFileSync(gradlePath, 'utf8');
+        if (contents.includes("findProperty('android.minSdkVersion') ?: '23'")) {
+          contents = contents.replace("findProperty('android.minSdkVersion') ?: '23'", "findProperty('android.minSdkVersion') ?: '24'");
+          fs.writeFileSync(gradlePath, contents, 'utf8');
+        }
+      }
+      return config;
+    },
+  ]);
+
+  return config;
 };
 
 const withNativeModules = (config) => {

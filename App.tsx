@@ -38,6 +38,17 @@ interface ShizukuStatus {
   message?: string;
 }
 
+interface CertCapability {
+  sdkInt: number;
+  manufacturer: string;
+  model: string;
+  cacertsRemovedWritable: boolean;
+  cacertsRemovedPath: string;
+  cmdDevicePolicyAvailable: boolean;
+  mountRemountCapable: boolean;
+  canDisableCerts: boolean;
+}
+
 interface CommandResult {
   success: boolean;
   exitCode?: number;
@@ -101,6 +112,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [shizukuStatus, setShizukuStatus] = useState<ShizukuStatus>({ available: false, granted: false });
   const [isCheckingShizuku, setIsCheckingShizuku] = useState(true);
+  const [certCapability, setCertCapability] = useState<CertCapability | null>(null);
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, currentName: '' });
   const [logModalVisible, setLogModalVisible] = useState(false);
@@ -122,6 +134,21 @@ export default function App() {
       try {
         const res: ShizukuStatus = await ShizukuExecutor.checkShizukuPermission();
         setShizukuStatus(res);
+        // If Shizuku is connected and permission granted, probe cert management capability
+        if (res.available && res.granted && ShizukuExecutor.checkCertManagementCapability) {
+          try {
+            const cap: CertCapability = await ShizukuExecutor.checkCertManagementCapability();
+            setCertCapability(cap);
+          } catch (capErr: any) {
+            // Capability probe failed — assume unsupported
+            setCertCapability({
+              sdkInt: 0, manufacturer: 'unknown', model: 'unknown',
+              cacertsRemovedWritable: false, cacertsRemovedPath: '',
+              cmdDevicePolicyAvailable: false, mountRemountCapable: false,
+              canDisableCerts: false,
+            });
+          }
+        }
       } catch (err: any) {
         setShizukuStatus({ available: false, granted: false, message: err?.message || 'Failed to inspect Shizuku binder' });
       }
@@ -172,45 +199,75 @@ export default function App() {
   };
 
   /**
-   * Execute real certificate disable command via Shizuku shell
-   * Copies CA file from /system/etc/security/cacerts/<hash> to per-user cacerts-removed
+   * Execute real certificate disable command via Shizuku shell.
+   * Uses the device capability info to pick the best approach:
+   *  1. cacerts-removed file copy (if writable)
+   *  2. cmd device_policy set-ca-cert-enabled (Android 14+)
+   *  3. mount --bind overlay (rare but possible)
+   * Falls back gracefully with a clear message if none work.
    */
   const executeDisableCert = async (hash: string): Promise<CommandResult> => {
     if (!ShizukuExecutor || !ShizukuExecutor.executeShizukuCommand) {
       return { success: false, error: 'Shizuku native module not loaded.' };
     }
 
-    const script = `
-HASH="${hash}"
+    // Use detected capability paths when available
+    const removedDir = certCapability?.cacertsRemovedPath || '/data/misc/user/0/cacerts-removed';
+    const canUseRemoved = certCapability?.cacertsRemovedWritable ?? true;
+    const canUseDpc = certCapability?.cmdDevicePolicyAvailable ?? false;
+
+    // Build the most efficient script based on detected capabilities
+    let script: string;
+    if (canUseRemoved) {
+      // Fast path: just do the file copy, we know it works
+      script = `HASH="${hash}"; SRC="/system/etc/security/cacerts/$HASH"; if [ -f "$SRC" ]; then cp "$SRC" "${removedDir}/$HASH" && chmod 644 "${removedDir}/$HASH" 2>/dev/null; if [ -f "${removedDir}/$HASH" ]; then echo "SUCCESS: Disabled via ${removedDir}"; exit 0; fi; fi; echo "FAIL"; exit 1`;
+    } else if (canUseDpc) {
+      // Fast path: just use cmd device_policy
+      script = `cmd device_policy set-ca-cert-enabled "${hash}" false 2>/dev/null && echo "SUCCESS: Disabled via device_policy" && exit 0; echo "FAIL"; exit 1`;
+    } else {
+      // Slow path: try everything, we don't know what works on this OEM
+      // Note: $HASH, $SRC, $d etc. are shell variables (NOT JS template expressions)
+      // ${hash} and ${removedDir} are JS template interpolations (curly braces = TS interpolation)
+      script = `HASH="${hash}"
 SRC="/system/etc/security/cacerts/$HASH"
 
-TARGET_DIR=""
-if [ -d "/data/misc/user/0/cacerts-removed" ] && [ -w "/data/misc/user/0/cacerts-removed" ]; then
-  TARGET_DIR="/data/misc/user/0/cacerts-removed"
-elif [ -d "/data/misc/keychain/cacerts-removed" ] && [ -w "/data/misc/keychain/cacerts-removed" ]; then
-  TARGET_DIR="/data/misc/keychain/cacerts-removed"
-else
-  mkdir -p /data/misc/user/0/cacerts-removed 2>/dev/null && TARGET_DIR="/data/misc/user/0/cacerts-removed"
-fi
-
-if [ -n "$TARGET_DIR" ] && [ -f "$SRC" ]; then
-  cp "$SRC" "$TARGET_DIR/$HASH" && chmod 644 "$TARGET_DIR/$HASH" 2>/dev/null
-  if [ -f "$TARGET_DIR/$HASH" ]; then
-    echo "SUCCESS: Copied $HASH to $TARGET_DIR"
-    exit 0
+# Approach 1: Write to cacerts-removed (standard no-root approach)
+for d in /data/misc/user/0/cacerts-removed /data/misc/keychain/cacerts-removed; do
+  if [ -d "$d" ] && [ -w "$d" ]; then
+    if [ -f "$SRC" ]; then
+      cp "$SRC" "$d/$HASH" && chmod 644 "$d/$HASH" 2>/dev/null
+      if [ -f "$d/$HASH" ]; then echo "SUCCESS: Disabled via $d"; exit 0; fi
+    fi
   fi
+done
+
+# Approach 2: Create cacerts-removed dir and try again
+mkdir -p /data/misc/user/0/cacerts-removed 2>/dev/null
+if [ -d /data/misc/user/0/cacerts-removed ] && [ -w /data/misc/user/0/cacerts-removed ] && [ -f "$SRC" ]; then
+  cp "$SRC" /data/misc/user/0/cacerts-removed/$HASH && chmod 644 /data/misc/user/0/cacerts-removed/$HASH 2>/dev/null
+  if [ -f /data/misc/user/0/cacerts-removed/$HASH ]; then echo "SUCCESS: Disabled via newly created dir"; exit 0; fi
 fi
 
-# Fallback: device_policy service
+# Approach 3: cmd device_policy (Android 14+)
 cmd device_policy set-ca-cert-enabled "$HASH" false 2>/dev/null
+if [ $? -eq 0 ]; then echo "SUCCESS: Disabled via device_policy"; exit 0; fi
+cmd devicepolicy set-ca-cert-enabled "$HASH" false 2>/dev/null
+if [ $? -eq 0 ]; then echo "SUCCESS: Disabled via devicepolicy"; exit 0; fi
+
+# Approach 4: Try to remount /system and write directly
+mount -o rw,remount / 2>/dev/null
 if [ $? -eq 0 ]; then
-  echo "SUCCESS: Disabled via device_policy"
-  exit 0
+  if [ -f "$SRC" ]; then
+    mv "$SRC" "$SRC.disabled" 2>/dev/null && echo "SUCCESS: Disabled via system remount"; exit 0
+  fi
+  mount -o ro,remount / 2>/dev/null
 fi
 
-echo "PERMISSION_DENIED: Shell UID lacks write permission to cacerts-removed on this OEM build."
+echo "UNSUPPORTED: This device's OEM restricts automated certificate management."
+echo "Use Settings > Security > Trusted Credentials to disable certificates manually."
 exit 1
 `;
+    }
 
     try {
       const res: CommandResult = await ShizukuExecutor.executeShizukuCommand(script);
@@ -221,28 +278,50 @@ exit 1
   };
 
   /**
-   * Execute real certificate enable/restore command via Shizuku shell
-   * Removes CA file from per-user cacerts-removed
+   * Execute real certificate enable/restore command via Shizuku shell.
    */
   const executeEnableCert = async (hash: string): Promise<CommandResult> => {
     if (!ShizukuExecutor || !ShizukuExecutor.executeShizukuCommand) {
       return { success: false, error: 'Shizuku native module not loaded.' };
     }
 
-    const script = `
-HASH="${hash}"
+    const removedDir = certCapability?.cacertsRemovedPath || '/data/misc/user/0/cacerts-removed';
+    const canUseRemoved = certCapability?.cacertsRemovedWritable ?? true;
+    const canUseDpc = certCapability?.cmdDevicePolicyAvailable ?? false;
+
+    let script: string;
+    if (canUseRemoved) {
+      script = `HASH="${hash}"; REMOVED=0; for d in ${removedDir} /data/misc/user/0/cacerts-removed /data/misc/keychain/cacerts-removed; do if [ -f "$d/$HASH" ]; then rm -f "$d/$HASH" && REMOVED=1; fi; done; if [ $REMOVED -eq 1 ]; then echo "SUCCESS: Restored $HASH"; exit 0; fi; echo "STATUS: Already enabled"; exit 0`;
+    } else if (canUseDpc) {
+      script = `cmd device_policy set-ca-cert-enabled "${hash}" true 2>/dev/null; echo "SUCCESS: Restored via device_policy"; exit 0`;
+    } else {
+      script = `HASH="${hash}"
 REMOVED=0
 
-if [ -f "/data/misc/user/0/cacerts-removed/$HASH" ]; then
-  rm -f "/data/misc/user/0/cacerts-removed/$HASH" && REMOVED=1
-fi
-if [ -f "/data/misc/keychain/cacerts-removed/$HASH" ]; then
-  rm -f "/data/misc/keychain/cacerts-removed/$HASH" && REMOVED=1
-fi
+# Try all known cacerts-removed paths
+for d in /data/misc/user/0/cacerts-removed /data/misc/keychain/cacerts-removed; do
+  if [ -f "$d/$HASH" ]; then
+    rm -f "$d/$HASH" && REMOVED=1
+  fi
+done
 
+# Try cmd device_policy
 cmd device_policy set-ca-cert-enabled "$HASH" true 2>/dev/null
+DPC_OK=$?
 
-if [ $REMOVED -eq 1 ] || [ $? -eq 0 ]; then
+# Try restoring from system remount
+if [ "$REMOVED" = "0" ] && [ $DPC_OK -ne 0 ]; then
+  mount -o rw,remount / 2>/dev/null
+  if [ -f /system/etc/security/cacerts/$HASH.disabled ]; then
+    mv /system/etc/security/cacerts/$HASH.disabled /system/etc/security/cacerts/$HASH 2>/dev/null
+    mount -o ro,remount / 2>/dev/null
+    echo "SUCCESS: Restored $HASH from system"
+    exit 0
+  fi
+  mount -o ro,remount / 2>/dev/null
+fi
+
+if [ "$REMOVED" = "1" ] || [ $DPC_OK -eq 0 ]; then
   echo "SUCCESS: Restored $HASH"
   exit 0
 fi
@@ -250,6 +329,7 @@ fi
 echo "STATUS: Certificate was not found in removed directory or already enabled."
 exit 0
 `;
+    }
 
     try {
       const res: CommandResult = await ShizukuExecutor.executeShizukuCommand(script);
@@ -275,6 +355,19 @@ exit 0
       return;
     }
 
+    // Warn upfront if device doesn't support cert management
+    if (certCapability && !certCapability.canDisableCerts) {
+      Alert.alert(
+        'Device Not Supported',
+        `${certCapability.manufacturer} ${certCapability.model} (Android ${certCapability.sdkInt}) restricts automated certificate management.\n\nUse Settings > Security > Trusted Credentials to toggle certificates manually.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: openAndroidCredentialsSettings },
+        ]
+      );
+      return;
+    }
+
     const result = willDisable ? await executeDisableCert(cert.hash) : await executeEnableCert(cert.hash);
 
     if (result.success) {
@@ -286,9 +379,16 @@ exit 0
         `${cert.name} (${cert.hash}) was ${willDisable ? 'disabled' : 'restored'} successfully.`
       );
     } else {
+      // Clean error: extract only the meaningful line, not the raw shell dump
+      const rawError = result.error || result.output || 'Unknown error';
+      const isUnsupported = rawError.includes('UNSUPPORTED');
+      const userMessage = isUnsupported
+        ? `This device's OEM (${certCapability?.manufacturer || 'unknown'}) restricts automated certificate management at the system level. The shell user (UID 2000) cannot modify the certificate store.\n\nPlease use the manual settings screen to toggle this certificate.`
+        : `The operation failed. This may be due to OEM restrictions on your device.\n\nUse Settings > Security > Trusted Credentials to toggle this certificate manually.`;
+
       setLogDetails({
-        title: `Failed to ${willDisable ? 'Disable' : 'Enable'} ${cert.name}`,
-        content: `Command Output / Error:\n${result.error || result.output || 'Unknown error'}\n\nReason:\nShizuku operates under Android's shell UID (2000). On some OEM builds/Android versions, the shell UID cannot directly write to /data/misc/user/0/cacerts-removed.\n\nPlease use the manual fallback (Settings > Trusted Credentials) to toggle this certificate.`,
+        title: `Cannot ${willDisable ? 'Disable' : 'Enable'} ${cert.name}`,
+        content: userMessage,
         isError: true,
       });
       setLogModalVisible(true);
@@ -309,6 +409,19 @@ exit 0
       return;
     }
 
+    // Upfront warning if device doesn't support cert management
+    if (certCapability && !certCapability.canDisableCerts) {
+      Alert.alert(
+        'Device Not Supported for Automation',
+        `${certCapability.manufacturer} ${certCapability.model} (Android ${certCapability.sdkInt}) restricts automated certificate management.\n\nBatch operations will not work. Use Settings > Security > Trusted Credentials to toggle certificates manually.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: openAndroidCredentialsSettings },
+        ]
+      );
+      return;
+    }
+
     setIsProcessingBatch(true);
     let successCount = 0;
     let failCount = 0;
@@ -316,6 +429,9 @@ exit 0
 
     const targetList = certs.filter((c) => c.enabled);
     setBatchProgress({ current: 0, total: targetList.length, currentName: 'Starting batch...' });
+
+    // Run the first one as a canary — if it fails with UNSUPPORTED, stop early
+    let abortBatch = false;
 
     for (let i = 0; i < targetList.length; i++) {
       const c = targetList[i];
@@ -327,20 +443,37 @@ exit 0
         setCerts((prev) => prev.map((item) => (item.id === c.id ? { ...item, enabled: false } : item)));
       } else {
         failCount++;
-        failures.push({ name: c.name, error: res.error || res.output || 'Permission denied' });
+        const errMsg = res.error || res.output || 'Permission denied';
+        failures.push({ name: c.name, error: errMsg });
+
+        // If the first cert fails with UNSUPPORTED, stop — no point running 30 more
+        if (i === 0 && (errMsg.includes('UNSUPPORTED') || errMsg.includes('PERMISSION_DENIED'))) {
+          abortBatch = true;
+          break;
+        }
       }
     }
 
     setIsProcessingBatch(false);
 
-    if (failCount === 0) {
+    if (abortBatch) {
+      Alert.alert(
+        'Automation Not Supported on This Device',
+        `Your device's OEM restricts the shell user from modifying the certificate store.\n\nUse Settings > Security > Trusted Credentials to toggle certificates manually.\n\nTested ${failures[0]?.name}: ${failures[0]?.error?.split('\n')[0] || 'permission denied'}`,
+        [
+          { text: 'OK' },
+          { text: 'Open Settings', onPress: openAndroidCredentialsSettings },
+        ]
+      );
+    } else if (failCount === 0) {
       Alert.alert('Batch Complete', `Successfully disabled ${successCount}/${targetList.length} certificates via Shizuku.`);
     } else {
       setLogDetails({
         title: `Batch Result: ${successCount} Succeeded, ${failCount} Failed`,
-        content: `Summary:\n${successCount}/${targetList.length} certificates disabled.\n${failCount} failed due to shell UID write permission limits on this OEM.\n\nFailed items:\n` +
-          failures.map((f) => `• ${f.name}: ${f.error}`).join('\n') +
-          `\n\nPlease use the manual fallback (Settings > Trusted credentials) for any failed certificates.`,
+        content: `${successCount}/${targetList.length} certificates disabled.\n${failCount} failed due to OEM restrictions on this device.\n\n` +
+          `Failed items:\n` +
+          failures.map((f) => `• ${f.name}`).join('\n') +
+          `\n\nUse Settings > Security > Trusted Credentials for the failed certificates.`,
         isError: true,
       });
       setLogModalVisible(true);
@@ -351,6 +484,18 @@ exit 0
   const handleMarkAllEnabled = async () => {
     if (!shizukuStatus.granted) {
       Alert.alert('Shizuku Required', 'Shizuku permission is required for automated batch restore.');
+      return;
+    }
+
+    if (certCapability && !certCapability.canDisableCerts) {
+      Alert.alert(
+        'Device Not Supported for Automation',
+        `${certCapability.manufacturer} ${certCapability.model} restricts automated certificate management. Use Settings > Security > Trusted Credentials to restore certificates.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: openAndroidCredentialsSettings },
+        ]
+      );
       return;
     }
 
@@ -426,7 +571,11 @@ exit 0
 
           <Text style={styles.statusDescription}>
             {shizukuStatus.granted
-              ? 'Native binder linked. Commands execute directly on-device with shell privileges without root or PC.'
+              ? certCapability
+                ? certCapability.canDisableCerts
+                  ? `Native binder linked. Commands execute on-device with shell privileges. (${certCapability.manufacturer} ${certCapability.model}, Android ${certCapability.sdkInt})`
+                  : `Shizuku connected but ${certCapability.manufacturer} ${certCapability.model} (Android ${certCapability.sdkInt}) restricts automated cert management. Use manual settings below.`
+                : 'Native binder linked. Checking device compatibility...'
               : shizukuStatus.available
               ? 'Shizuku service is detected. Tap below to grant permission for this application.'
               : 'To enable automated 1-click toggles without PC: install the Shizuku app, pair via Developer Options > Wireless Debugging, and start the service.'}
@@ -459,25 +608,36 @@ exit 0
             <Text style={styles.primaryButtonText}>Open Android Credentials Settings</Text>
           </TouchableOpacity>
 
-          <View style={styles.buttonRow}>
-            <TouchableOpacity
-              style={[styles.secondaryButton, isProcessingBatch && { opacity: 0.5 }]}
-              onPress={handleMarkAllDisabled}
-              disabled={isProcessingBatch}
-            >
-              <Ionicons name="close-circle" size={16} color="#FF3B30" style={{ marginRight: 6 }} />
-              <Text style={styles.secondaryButtonText}>Mark All Off</Text>
-            </TouchableOpacity>
+          {(!certCapability || certCapability.canDisableCerts) && (
+            <View style={styles.buttonRow}>
+              <TouchableOpacity
+                style={[styles.secondaryButton, isProcessingBatch && { opacity: 0.5 }]}
+                onPress={handleMarkAllDisabled}
+                disabled={isProcessingBatch}
+              >
+                <Ionicons name="close-circle" size={16} color="#FF3B30" style={{ marginRight: 6 }} />
+                <Text style={styles.secondaryButtonText}>Mark All Off</Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.secondaryButton, isProcessingBatch && { opacity: 0.5 }]}
-              onPress={handleMarkAllEnabled}
-              disabled={isProcessingBatch}
-            >
-              <Ionicons name="refresh" size={16} color="#34C759" style={{ marginRight: 6 }} />
-              <Text style={styles.secondaryButtonText}>Reset All</Text>
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity
+                style={[styles.secondaryButton, isProcessingBatch && { opacity: 0.5 }]}
+                onPress={handleMarkAllEnabled}
+                disabled={isProcessingBatch}
+              >
+                <Ionicons name="refresh" size={16} color="#34C759" style={{ marginRight: 6 }} />
+                <Text style={styles.secondaryButtonText}>Reset All</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {certCapability && !certCapability.canDisableCerts && (
+            <View style={{ backgroundColor: '#3D2D10', borderRadius: 10, padding: 12, marginTop: 8 }}>
+              <Text style={{ color: '#FF9500', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>⚠️ Automated cert management not available on this device</Text>
+              <Text style={{ color: '#C7C7CC', fontSize: 11, lineHeight: 16 }}>
+                {certCapability.manufacturer} {certCapability.model} (Android {certCapability.sdkInt}) restricts shell-level certificate modifications. Use the button above to toggle certificates manually via Android Settings.
+              </Text>
+            </View>
+          )}
 
           {isProcessingBatch && (
             <View style={styles.progressBox}>

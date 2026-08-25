@@ -157,4 +157,107 @@ class ShizukuExecutorModule(reactContext: ReactApplicationContext) : ReactContex
             }
         }.start()
     }
+
+    /**
+     * Probe device capabilities for cert management.
+     * Returns a map with diagnostic info so the JS layer can decide
+     * which approach to use (or whether to skip automation entirely).
+     */
+    @ReactMethod
+    fun checkCertManagementCapability(promise: Promise) {
+        Thread {
+            try {
+                if (!Shizuku.pingBinder()) {
+                    promise.reject("ERR_SHIZUKU_DOWN", "Shizuku service is not running.")
+                    return@Thread
+                }
+                if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                    promise.reject("ERR_NO_PERMISSION", "Shizuku permission has not been granted.")
+                    return@Thread
+                }
+
+                val sdkInt = android.os.Build.VERSION.SDK_INT
+                val manufacturer = android.os.Build.MANUFACTURER ?: "unknown"
+                val model = android.os.Build.MODEL ?: "unknown"
+
+                // Build the probe script using regular strings to avoid Kotlin raw-string interpolation issues
+                val d = "${'$'}d"  // shell variable reference
+                val dq = "${'"'}${'$'}d${'"'}"  // quoted shell variable
+                val drw = "${'$'}REMOVED_WRITABLE"
+                val drp = "${'$'}REMOVED_PATH"
+                val dcmd = "${'$'}CMD_DPC_OK"
+                val dmount = "${'$'}MOUNT_RW"
+
+                val testProbe =
+                    "# Check cacerts-removed writability\n" +
+                    "REMOVED_WRITABLE=0\n" +
+                    "REMOVED_PATH=''\n" +
+                    "for d in /data/misc/user/0/cacerts-removed /data/misc/keychain/cacerts-removed; do\n" +
+                    "  if [ -d \"$d\" ] && [ -w \"$d\" ]; then\n" +
+                    "    REMOVED_WRITABLE=1\n" +
+                    "    REMOVED_PATH=\"$d\"\n" +
+                    "    break\n" +
+                    "  fi\n" +
+                    "done\n" +
+                    "if [ \"$drw\" = \"0\" ]; then\n" +
+                    "  mkdir -p /data/misc/user/0/cacerts-removed 2>/dev/null\n" +
+                    "  if [ -d /data/misc/user/0/cacerts-removed ] && [ -w /data/misc/user/0/cacerts-removed ]; then\n" +
+                    "    REMOVED_WRITABLE=1\n" +
+                    "    REMOVED_PATH=/data/misc/user/0/cacerts-removed\n" +
+                    "  fi\n" +
+                    "fi\n" +
+                    "echo \"REMOVED_WRITABLE=$drw\"\n" +
+                    "echo \"REMOVED_PATH=$drp\"\n" +
+                    "CMD_DPC_OK=0\n" +
+                    "if cmd device_policy set-ca-cert-enabled 2>&1 | grep -q 'set-ca-cert-enabled'; then\n" +
+                    "  CMD_DPC_OK=1\n" +
+                    "fi\n" +
+                    "if cmd devicepolicy set-ca-cert-enabled 2>&1 | grep -q 'set-ca-cert-enabled'; then\n" +
+                    "  CMD_DPC_OK=1\n" +
+                    "fi\n" +
+                    "echo \"CMD_DPC_OK=$dcmd\"\n" +
+                    "MOUNT_RW=0\n" +
+                    "if mount -o rw,remount / 2>/dev/null; then\n" +
+                    "  mount -o ro,remount / 2>/dev/null\n" +
+                    "  MOUNT_RW=1\n" +
+                    "fi\n" +
+                    "echo \"MOUNT_RW=$dmount\"\n"
+
+                val process: ShizukuRemoteProcess = Shizuku.newProcess(arrayOf("sh", "-c", testProbe), null, null)
+                val outReader = BufferedReader(InputStreamReader(process.inputStream))
+                val errReader = BufferedReader(InputStreamReader(process.errorStream))
+
+                val output = StringBuilder()
+                val errorOutput = StringBuilder()
+                var line: String?
+                while (outReader.readLine().also { line = it } != null) {
+                    output.append(line).append("\n")
+                }
+                while (errReader.readLine().also { line = it } != null) {
+                    errorOutput.append(line).append("\n")
+                }
+                process.waitFor()
+
+                val outStr = output.toString().trim()
+                val removedWritable = outStr.contains("REMOVED_WRITABLE=1")
+                val removedPath = outStr.lines().firstOrNull { it.startsWith("REMOVED_PATH=") }?.removePrefix("REMOVED_PATH=") ?: ""
+                val cmdDpcOk = outStr.contains("CMD_DPC_OK=1")
+                val mountRw = outStr.contains("MOUNT_RW=1")
+
+                val result = Arguments.createMap().apply {
+                    putInt("sdkInt", sdkInt)
+                    putString("manufacturer", manufacturer)
+                    putString("model", model)
+                    putBoolean("cacertsRemovedWritable", removedWritable)
+                    putString("cacertsRemovedPath", removedPath)
+                    putBoolean("cmdDevicePolicyAvailable", cmdDpcOk)
+                    putBoolean("mountRemountCapable", mountRw)
+                    putBoolean("canDisableCerts", removedWritable || cmdDpcOk || mountRw)
+                }
+                promise.resolve(result)
+            } catch (e: Exception) {
+                promise.reject("ERR_PROBE", e.message ?: "Failed to check cert management capability")
+            }
+        }.start()
+    }
 }

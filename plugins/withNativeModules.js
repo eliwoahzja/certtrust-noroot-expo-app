@@ -238,4 +238,4 @@ const withNativeModules = (config) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withNativeModules, 'withNativeModules', '1.2.0');
+module.exports = createRunOncePlugin(withNativeModules, 'withNativeModules', '1.3.0');

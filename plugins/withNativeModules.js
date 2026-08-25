@@ -156,6 +156,37 @@ const withShizukuPermissions = (config) => {
 };
 
 /**
+ * 4b. Inject ShizukuProvider ContentProvider into AndroidManifest.xml
+ *     Required for Shizuku binder initialization; the provider AAR does not auto-merge it.
+ */
+const withShizukuProvider = (config) => {
+  return withDangerousMod(config, [
+    'android',
+    (config) => {
+      const manifestPath = path.join(
+        config.modRequest.platformProjectRoot,
+        'app/src/main/AndroidManifest.xml'
+      );
+      let contents = fs.readFileSync(manifestPath, 'utf8');
+      if (!contents.includes('rikka.shizuku.ShizukuProvider')) {
+        const provider = `
+    <provider
+      android:name="rikka.shizuku.ShizukuProvider"
+      android:authorities="${'${applicationId}'}.shizuku"
+      android:multiprocess="false"
+      android:enabled="true"
+      android:exported="true"
+      android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />`;
+        // Insert provider just before closing </application>
+        contents = contents.replace('</application>', `${provider}\n  </application>`);
+        fs.writeFileSync(manifestPath, contents, 'utf8');
+      }
+      return config;
+    },
+  ]);
+};
+
+/**
  * 5. Bump minSdkVersion to 24 (required by Shizuku API 13.1.5 manifest merger)
  *    Writes into gradle.properties AND patches build.gradle after prebuild.
  */
@@ -202,8 +233,9 @@ const withNativeModules = (config) => {
   config = withShizukuGradleDependencies(config);
   config = withCertTrustPackage(config);
   config = withShizukuPermissions(config);
+  config = withShizukuProvider(config);
   config = withMinSdk24(config);
   return config;
 };
 
-module.exports = createRunOncePlugin(withNativeModules, 'withNativeModules', '1.1.0');
+module.exports = createRunOncePlugin(withNativeModules, 'withNativeModules', '1.2.0');

@@ -4,7 +4,7 @@ const {
   withMainApplication,
   withAndroidManifest,
   createRunOncePlugin,
-} = require('@expo/config-plugins');
+} = require('expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 

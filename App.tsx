@@ -446,8 +446,8 @@ exit 0
         const errMsg = res.error || res.output || 'Permission denied';
         failures.push({ name: c.name, error: errMsg });
 
-        // If the first cert fails with UNSUPPORTED, stop — no point running 30 more
-        if (i === 0 && (errMsg.includes('UNSUPPORTED') || errMsg.includes('PERMISSION_DENIED'))) {
+        // Abort early on first failure — if the canary cert fails, the approach is broken
+        if (i === 0) {
           abortBatch = true;
           break;
         }

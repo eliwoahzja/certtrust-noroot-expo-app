@@ -209,10 +209,10 @@ class ShizukuExecutorModule(reactContext: ReactApplicationContext) : ReactContex
                     "echo \"REMOVED_WRITABLE=$drw\"\n" +
                     "echo \"REMOVED_PATH=$drp\"\n" +
                     "CMD_DPC_OK=0\n" +
-                    "if cmd device_policy set-ca-cert-enabled 2>&1 | grep -q 'set-ca-cert-enabled'; then\n" +
+                    "if ! cmd device_policy set-ca-cert-enabled 2>&1 | grep -q 'Unknown command'; then\n" +
                     "  CMD_DPC_OK=1\n" +
                     "fi\n" +
-                    "if cmd devicepolicy set-ca-cert-enabled 2>&1 | grep -q 'set-ca-cert-enabled'; then\n" +
+                    "if ! cmd devicepolicy set-ca-cert-enabled 2>&1 | grep -q 'Unknown command'; then\n" +
                     "  CMD_DPC_OK=1\n" +
                     "fi\n" +
                     "echo \"CMD_DPC_OK=$dcmd\"\n" +

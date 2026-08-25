@@ -30,15 +30,15 @@ jobs:
       - name: Generate native Android project
         run: npx expo prebuild --platform android
 
-      - name: Build debug APK
+      - name: Build release APK (bundles JS, signed with debug keystore)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: certtrust-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error

@@ -64,8 +64,8 @@ const withShizukuGradleDependencies = (config) => {
     let contents = config.modResults.contents;
     const shizukuDeps = `
     // Shizuku API (No-Root Wireless ADB Binder)
-    implementation 'dev.rikka.shizuku:api:13.1.5'
-    implementation 'dev.rikka.shizuku:provider:13.1.5'
+    implementation 'dev.rikka.shizuku:api:13.1.0'
+    implementation 'dev.rikka.shizuku:provider:13.1.0'
 `;
 
     if (!contents.includes('dev.rikka.shizuku:api')) {
@@ -90,11 +90,7 @@ const withCertTrustPackage = (config) => {
 
     if (!contents.includes('CertTrustPackage')) {
       if (isKotlin) {
-        // Kotlin imports
-        if (!contents.includes('import com.certmanager.noroot.CertTrustPackage')) {
-          contents = 'import com.certmanager.noroot.CertTrustPackage\n' + contents;
-        }
-        // Kotlin package list insertion
+        // Kotlin package list insertion (same package, no import needed)
         if (contents.includes('PackageList(this).packages.apply {')) {
           contents = contents.replace(
             'PackageList(this).packages.apply {',
@@ -210,4 +206,4 @@ const withNativeModules = (config) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withNativeModules, 'withNativeModules', '1.0.0');
+module.exports = createRunOncePlugin(withNativeModules, 'withNativeModules', '1.1.0');

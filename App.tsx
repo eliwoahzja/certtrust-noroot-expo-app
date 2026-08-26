@@ -26,7 +26,9 @@ const { width: SCREEN_W } = Dimensions.get('window');
 
 const MAKER = 'eliwoahzja';
 const MAKER_GITHUB = 'https://github.com/eliwoahzja';
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.1.0';
+const GITHUB_REPO = 'eliwoahzja/certtrust-noroot-expo-app';
+const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 
 interface CertItem {
   id: string;
@@ -172,6 +174,8 @@ export default function App() {
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, currentName: '' });
   const [aboutVisible, setAboutVisible] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<{ version: string; downloadUrl: string; releaseUrl: string; notes: string } | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(true);
   const [logModalVisible, setLogModalVisible] = useState(false);
   const [logDetails, setLogDetails] = useState<{ title: string; content: string; isError?: boolean }>({
     title: '',
@@ -185,6 +189,7 @@ export default function App() {
 
   useEffect(() => {
     checkShizukuState();
+    checkForUpdates();
   }, []);
 
   const checkShizukuState = async () => {
@@ -237,6 +242,45 @@ export default function App() {
       Alert.alert('Permission Request Error', err?.message || 'Failed to trigger Shizuku permission dialog.');
       checkShizukuState();
     }
+  };
+
+  /**
+   * Compare two semver-like version strings (e.g. "2.1.0" vs "2.0.0").
+   * Returns true if `latest` is strictly newer than `current`.
+   */
+  const isNewerVersion = (current: string, latest: string): boolean => {
+    const parse = (v: string) => v.replace(/^v/, '').split('.').map(Number);
+    const [cMaj, cMin = 0, cPat = 0] = parse(current);
+    const [lMaj, lMin = 0, lPat = 0] = parse(latest);
+    if (lMaj !== cMaj) return lMaj > cMaj;
+    if (lMin !== cMin) return lMin > cMin;
+    return lPat > cPat;
+  };
+
+  const checkForUpdates = async () => {
+    try {
+      const res = await fetch(GITHUB_API);
+      if (!res.ok) return;
+      const data = await res.json();
+      const latestVersion = data.tag_name?.replace(/^v/, '');
+      if (!latestVersion || !isNewerVersion(APP_VERSION, latestVersion)) {
+        setIsCheckingUpdate(false);
+        return;
+      }
+      // Find the APK asset
+      const apkAsset = (data.assets || []).find((a: any) =>
+        a.name?.endsWith('.apk') || a.content_type?.includes('android')
+      );
+      setUpdateInfo({
+        version: latestVersion,
+        downloadUrl: apkAsset?.browser_download_url || data.html_url,
+        releaseUrl: data.html_url,
+        notes: data.body?.trim() || '',
+      });
+    } catch {
+      // Silently ignore network errors — update check is non-critical
+    }
+    setIsCheckingUpdate(false);
   };
 
   const openAndroidCredentialsSettings = async () => {
@@ -609,6 +653,42 @@ exit 0
           </View>
         </View>
 
+        {/* Update Available Banner */}
+        {updateInfo && (
+          <PressCard
+            style={styles.updateBanner}
+            onPress={() => {
+              Alert.alert(
+                `Update Available: v${updateInfo.version}`,
+                `You are on v${APP_VERSION}. A newer version (${updateInfo.version}) is available with improvements and fixes.\n\nTap "Download" to get the latest release from GitHub.`,
+                [
+                  { text: 'Later', style: 'cancel' },
+                  {
+                    text: 'Download v' + updateInfo.version,
+                    onPress: () => Linking.openURL(updateInfo.downloadUrl).catch(() => Linking.openURL(updateInfo.releaseUrl)),
+                  },
+                ]
+              );
+            }}
+          >
+            <View style={styles.updateIconBox}>
+              <Ionicons name="arrow-up-circle" size={22} color="#052E1B" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.updateTitle}>Update Available · v{updateInfo.version}</Text>
+              <Text style={styles.updateSub} numberOfLines={1}>Tap to download the latest version</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#34D399" />
+          </PressCard>
+        )}
+
+        {isCheckingUpdate && (
+          <View style={styles.updateChecking}>
+            <ActivityIndicator size="small" color="#34D399" />
+            <Text style={styles.updateCheckingText}>Checking for updates…</Text>
+          </View>
+        )}
+
         {/* Shizuku Bridge Status Card */}
         <View style={[styles.statusCard, shizukuStatus.granted ? styles.statusCardActive : styles.statusCardInactive]}>
           <View style={styles.statusHeader}>
@@ -797,6 +877,13 @@ exit 0
           </View>
         </View>
       </Modal>
+
+      {/* Update Modal */}
+      {updateInfo && (
+        <Modal visible={false} transparent animationType="fade">
+          {/* This modal is triggered via Alert above — kept for programmatic use if needed */}
+        </Modal>
+      )}
 
       {/* About Modal */}
       <Modal visible={aboutVisible} transparent animationType="fade" onRequestClose={() => setAboutVisible(false)}>
@@ -1054,4 +1141,31 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginVertical: 16,
   },
+  updateBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#34D399',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 14,
+    gap: 10,
+  },
+  updateIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#0C1F17',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  updateTitle: { fontSize: 14, fontWeight: '800', color: '#052E1B' },
+  updateSub: { fontSize: 11, color: '#065F46', marginTop: 1, fontWeight: '600' },
+  updateChecking: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 4,
+    marginBottom: 12,
+  },
+  updateCheckingText: { fontSize: 11, color: '#6B7280', fontWeight: '600' },
 });

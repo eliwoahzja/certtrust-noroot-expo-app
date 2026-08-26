@@ -26,7 +26,7 @@ const { width: SCREEN_W } = Dimensions.get('window');
 
 const MAKER = 'eliwoahzja';
 const MAKER_GITHUB = 'https://github.com/eliwoahzja';
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.1.1';
 const GITHUB_REPO = 'eliwoahzja/certtrust-noroot-expo-app';
 const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 

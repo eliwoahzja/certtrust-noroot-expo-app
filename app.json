@@ -2,7 +2,7 @@
   "expo": {
     "name": "CertTrust No-Root",
     "slug": "certtrust-noroot",
-    "version": "2.1.0",
+    "version": "2.1.1",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "ios": {

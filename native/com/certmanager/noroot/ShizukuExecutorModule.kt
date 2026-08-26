@@ -187,13 +187,19 @@ class ShizukuExecutorModule(reactContext: ReactApplicationContext) : ReactContex
                 val drp = "${'$'}REMOVED_PATH"
                 val dcmd = "${'$'}CMD_DPC_OK"
                 val dmount = "${'$'}MOUNT_RW"
+                val dout = "${'$'}DPC_OUT"
+
+                // IMPORTANT: every check below performs a REAL end-to-end test.
+                // DAC checks like [ -w ] pass even when SELinux denies the write,
+                // and `mount -o rw,remount` can return 0 without enabling writes.
 
                 val testProbe =
-                    "# Check cacerts-removed writability\n" +
+                    "# 1. cacerts-removed: verify with a REAL write test (touch+rm), not just [ -w ]\n" +
                     "REMOVED_WRITABLE=0\n" +
                     "REMOVED_PATH=''\n" +
                     "for d in /data/misc/user/0/cacerts-removed /data/misc/keychain/cacerts-removed; do\n" +
-                    "  if [ -d \"$d\" ] && [ -w \"$d\" ]; then\n" +
+                    "  if [ -d \"$d\" ] && touch \"$d/.ct_probe\" 2>/dev/null; then\n" +
+                    "    rm -f \"$d/.ct_probe\"\n" +
                     "    REMOVED_WRITABLE=1\n" +
                     "    REMOVED_PATH=\"$d\"\n" +
                     "    break\n" +
@@ -201,25 +207,31 @@ class ShizukuExecutorModule(reactContext: ReactApplicationContext) : ReactContex
                     "done\n" +
                     "if [ \"$drw\" = \"0\" ]; then\n" +
                     "  mkdir -p /data/misc/user/0/cacerts-removed 2>/dev/null\n" +
-                    "  if [ -d /data/misc/user/0/cacerts-removed ] && [ -w /data/misc/user/0/cacerts-removed ]; then\n" +
+                    "  if [ -d /data/misc/user/0/cacerts-removed ] && touch /data/misc/user/0/cacerts-removed/.ct_probe 2>/dev/null; then\n" +
+                    "    rm -f /data/misc/user/0/cacerts-removed/.ct_probe\n" +
                     "    REMOVED_WRITABLE=1\n" +
                     "    REMOVED_PATH=/data/misc/user/0/cacerts-removed\n" +
                     "  fi\n" +
                     "fi\n" +
                     "echo \"REMOVED_WRITABLE=$drw\"\n" +
                     "echo \"REMOVED_PATH=$drp\"\n" +
+                    "# 2. DPC command: run it with a dummy hash — the subcommand only exists\n" +
+                    "#    if the output does NOT contain 'Unknown command'\n" +
                     "CMD_DPC_OK=0\n" +
-                    "if ! cmd device_policy set-ca-cert-enabled 2>&1 | grep -q 'Unknown command'; then\n" +
-                    "  CMD_DPC_OK=1\n" +
-                    "fi\n" +
-                    "if ! cmd devicepolicy set-ca-cert-enabled 2>&1 | grep -q 'Unknown command'; then\n" +
-                    "  CMD_DPC_OK=1\n" +
-                    "fi\n" +
+                    "DPC_OUT=$(cmd device_policy set-ca-cert-enabled 0000000000.0 false 2>&1)\n" +
+                    "case \"$dout\" in\n" +
+                    "  *Unknown*command*) : ;;\n" +
+                    "  *) CMD_DPC_OK=1 ;;\n" +
+                    "esac\n" +
                     "echo \"CMD_DPC_OK=$dcmd\"\n" +
+                    "# 3. Remount: verify by actually creating a file inside the system cacerts dir\n" +
                     "MOUNT_RW=0\n" +
                     "if mount -o rw,remount / 2>/dev/null; then\n" +
+                    "  if touch /system/etc/security/cacerts/.ct_probe 2>/dev/null; then\n" +
+                    "    rm -f /system/etc/security/cacerts/.ct_probe\n" +
+                    "    MOUNT_RW=1\n" +
+                    "  fi\n" +
                     "  mount -o ro,remount / 2>/dev/null\n" +
-                    "  MOUNT_RW=1\n" +
                     "fi\n" +
                     "echo \"MOUNT_RW=$dmount\"\n"
 
